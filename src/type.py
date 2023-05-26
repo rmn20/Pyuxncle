@@ -7,6 +7,7 @@ class DTYPES(Enum):
     VOID = auto()
     SUB = auto()
     DEV = auto()
+    VEC = auto()
     POINTER = auto()
     ARRAY = auto()
 
@@ -38,7 +39,8 @@ class Variable:
 class VARINFOINDXS(IntEnum):
     GLOBAL = -1,
     SUBROUTINE = -2,
-    DEVICE = -3
+    DEVICE = -3,
+    VECTOR = -4
 
 # variable info, including the variable (name & datatype) and the index in the stack
 class VarInfo:
@@ -70,6 +72,22 @@ class Subroutine(DataType):
 
     def addArg(self, dtype: DataType):
         self.args.append(dtype)
+
+    def addUnxtal(self, uxntal: str):
+        self.instrs = self.instrs + uxntal
+
+    def getSize(self) -> int:
+        return 2 # the absolute address is pushed onto the stack :D
+
+    def compare(self, type):
+        return False # TODO
+
+class Vector(DataType):
+    def __init__(self, name: str):
+        super().__init__("_vec", DTYPES.VEC)
+        self.instrs = ""
+        self.vecname = name
+        self.retType = VoidDataType(); #For return parsing
 
     def addUnxtal(self, uxntal: str):
         self.instrs = self.instrs + uxntal

@@ -9,12 +9,16 @@ import thinlib
 class PRECTYPE(IntEnum):
     NONE = 0,
     ASSIGNMENT = 1, # =
-    INDEX = 2,      # []
-    COMPAR = 3,     # == !=
-    TERM = 4,       # + - 
-    FACTOR = 5,     # * /
-    CALL = 6,       # ( )
-    PRIMARY = 7
+    OR = 2,      # ^
+    XOR = 3,      # |
+    AND = 4,      # &
+    COMPAR = 5,     # == !=
+    SFT = 6,       # << >>
+    TERM = 7,       # + - 
+    FACTOR = 8,     # * / %
+    INDEX = 9,      # []
+    CALL = 10,       # ()
+    PRIMARY = 11
 
 class _PrecRule:
     def __init__(self, prec: PRECTYPE, prefix: Callable[[DataType, bool, bool, PRECTYPE], DataType],
@@ -59,14 +63,24 @@ class Parser:
             TOKENTYPE.SEMICOLON:    _PrecRule(PRECTYPE.NONE,    None,           None),
             TOKENTYPE.LBRACE:       _PrecRule(PRECTYPE.NONE,    None,           None),
             TOKENTYPE.RBRACE:       _PrecRule(PRECTYPE.NONE,    None,           None),
+            
             TOKENTYPE.LBRACKET:     _PrecRule(PRECTYPE.INDEX,   None,           self.__index),
             TOKENTYPE.RBRACKET:     _PrecRule(PRECTYPE.NONE,    None,           None),
+            
             TOKENTYPE.PLUS:         _PrecRule(PRECTYPE.TERM,    None,           self.__binOp),
             TOKENTYPE.MINUS:        _PrecRule(PRECTYPE.TERM,    None,           self.__binOp),
+            
             TOKENTYPE.STAR:         _PrecRule(PRECTYPE.FACTOR,  self.__pointer, self.__binOp),
             TOKENTYPE.SLASH:        _PrecRule(PRECTYPE.FACTOR,  None,           self.__binOp),
             TOKENTYPE.MOD:          _PrecRule(PRECTYPE.FACTOR,  None,           self.__binOp),
-            TOKENTYPE.AMPER:        _PrecRule(PRECTYPE.NONE,    self.__ampersand, None),
+            
+            TOKENTYPE.AMPER:        _PrecRule(PRECTYPE.AND,    self.__ampersand,self.__binOp),
+            TOKENTYPE.VBAR:         _PrecRule(PRECTYPE.OR,      None,           self.__binOp),
+            TOKENTYPE.CARET:        _PrecRule(PRECTYPE.XOR,     None,           self.__binOp),
+            
+            TOKENTYPE.LSH:          _PrecRule(PRECTYPE.SFT,     None,           self.__binOp),
+            TOKENTYPE.RSH:          _PrecRule(PRECTYPE.SFT,     None,           self.__binOp),
+            
             TOKENTYPE.EQUAL:        _PrecRule(PRECTYPE.NONE,    None,           None),
             TOKENTYPE.EQUALEQUAL:   _PrecRule(PRECTYPE.COMPAR,  None,           self.__binOp),
             TOKENTYPE.GRTR:         _PrecRule(PRECTYPE.COMPAR,  None,           self.__binOp),
@@ -98,6 +112,8 @@ class Parser:
         self.subs: list[Variable] = []
         self.globals: list[Variable] = []
         self.devices: list[Device] = []
+        self.currentVec: int = -1
+        self.vecs: list[Variable] = []
         self.constants: list[_Constant] = [] # holds data like strings, constant arrays, etc. [TODO]
 
     def __errorAt(self, tkn: Token, err: str):
@@ -179,10 +195,12 @@ class Parser:
     def __writeOut(self, buf: str):
         if len(self.lefthand) > 0: # we're parsing an expression that needs to be emitted after the righthand is emitted
             self.lefthand[len(self.lefthand)-1] += buf
-        elif self.currentSub == -1: # we're not currently parsing a function, write it to the entry instructions
+        elif self.currentSub == -1 and self.currentVec == -1: # we're not currently parsing a function or vector, write it to the entry instructions
             self.entryInstr += buf
-        else:
+        elif self.currentSub != -1:
             self.subs[self.currentSub].dtype.addUnxtal(buf)
+        else:
+            self.vecs[self.currentVec].dtype.addUnxtal(buf)
 
     def __writeIntLiteral(self, num: int):
         self.__writeOut("#%.4x " % num)
@@ -191,7 +209,7 @@ class Parser:
         self.__writeOut("#%.2x " % num)
 
     # dtype: the datatype of the 2 values on the stack, rtype: the datatype pushed by the instruction
-    def __writeBinaryOp(self, op: str, dtype: DataType, rtype: DataType):
+    def __writeBinaryOp(self, op: str, dtype: DataType, dtype2: DataType, rtype: DataType):
         if dtype.type == DTYPES.INT:
             self.__writeOut("%s2\n" % op)
         elif dtype.type == DTYPES.CHAR:
@@ -200,7 +218,7 @@ class Parser:
             self.__error("Cannot perform binary operation on type '%s'" % dtype.name)
 
         # we popped both values
-        self.pushed -= dtype.getSize() * 2
+        self.pushed -= dtype.getSize() + dtype2.getSize();
         # we pushed the rtype
         self.pushed += rtype.getSize()
 
@@ -228,7 +246,7 @@ class Parser:
     # or __popScope is called again
     def __addScopeVar(self, var: Variable) -> VarInfo:
         # if we're not parsing a function, define the variable as a global
-        if self.currentSub == -1:
+        if self.currentSub == -1 and self.currentVec == -1:
             self.globals.append(var)
             return VarInfo(var, -1)
 
@@ -340,6 +358,10 @@ class Parser:
         for dev in self.devices:
             if dev.devname == name:
                 return VarInfo(dev, VARINFOINDXS.DEVICE.value)
+        
+        for vec in self.vecs:
+            if vec.name == name:
+                return VarInfo(vec, VARINFOINDXS.VECTOR.value)
 
         return None
 
@@ -362,6 +384,8 @@ class Parser:
             else:
                 self.__error("Can't set '%s': size greater than 2!" % varInfo.var.name)
         elif varInfo.indx == VARINFOINDXS.SUBROUTINE.value: # it's a sub, out the absolute address
+            self.__writeOut(";SUB_%s " % varInfo.var.name)
+        elif varInfo.indx == VARINFOINDXS.VECTOR.value: # it's a vec, out the absolute address
             self.__writeOut(";SUB_%s " % varInfo.var.name)
         else: # it's a normal var stored in the heap
             # read variable from the heap
@@ -395,6 +419,8 @@ class Parser:
                 self.__error("Can't set '%s': size greater than 2!" % varInfo.var.name)
         elif varInfo.indx == VARINFOINDXS.SUBROUTINE.value: # it's a sub, can't set that!
             self.__error("Can't set '%s': constant function!" % varInfo.var.name)
+        elif varInfo.indx == VARINFOINDXS.VECTOR.value: # it's a vec, can't set that!
+            self.__error("Can't set '%s': constant vector!" % varInfo.var.name)
         else: # it's a normal var stored in the heap
             # set variable
             if dtype.getSize() == 2:
@@ -416,6 +442,8 @@ class Parser:
             self.__writeOut(";globals/%s " % varInfo.var.name)
         elif varInfo.indx == VARINFOINDXS.SUBROUTINE.value: # it's a subroutine! our job is easy again, just push the absolute address (again)
             self.__writeOut(";%s " % dtype.subname)
+        elif varInfo.indx == VARINFOINDXS.VECTOR.value: # it's a vector! our job is easy again, just push the absolute address (again)
+            self.__writeOut(";%s " % dtype.vecname)
         elif varInfo.indx == VARINFOINDXS.DEVICE.value: # it's a device! we only alow DEO/DEI to interact with the devices address directly
             self.__error("Can't get address of device!")
         else: # it's a normal variable, we'll need to push it's heap address.
@@ -446,6 +474,9 @@ class Parser:
             return True
         # convert pointer to INT, (it's already the proper size)
         elif fromType.type == DTYPES.POINTER and toType.type == DTYPES.INT:
+            return True
+        # convert vector pointer to pointer, (it's already the proper size)
+        elif fromType.type == DTYPES.POINTER and fromType.pType.type == DTYPES.VEC and toType.type == DTYPES.POINTER:
             return True
 
         return False
@@ -589,40 +620,59 @@ class Parser:
         # the expression expects nothing, return nothing (void)
         if not expectValue:
             return VoidDataType()
+        
+        #SFT uses 8 bit values
+        expectedRightType: DataType = leftType;
+        if tkn.type == TOKENTYPE.LSH or tkn.type == TOKENTYPE.RSH: expectedRightType = CharDataType();
 
         # try to convert the expression to our expected type
-        if not self.__tryTypeCast(rtype, leftType):
-            self.__errorAt(tkn, "Cannot convert '%s' to '%s'!" % (rtype.name, leftType.name))
+        if not self.__tryTypeCast(rtype, expectedRightType):
+            self.__errorAt(tkn, "Cannot convert '%s' to '%s'!" % (rtype.name, expectedRightType.name))
+            
+        if tkn.type == TOKENTYPE.RSH or tkn.type == TOKENTYPE.LSH:
+            self.__writeOut("#0f AND\n")
+            self.__writeOut("")
+            
+        if tkn.type == TOKENTYPE.LSH:
+            self.__writeOut("#40 SFT\n")
 
         if tkn.type == TOKENTYPE.PLUS:
-            self.__writeBinaryOp("ADD", leftType, leftType)
+            self.__writeBinaryOp("ADD", leftType, expectedRightType, leftType)
         elif tkn.type == TOKENTYPE.MINUS:
-            self.__writeBinaryOp("SUB", leftType, leftType)
+            self.__writeBinaryOp("SUB", leftType, expectedRightType, leftType)
         elif tkn.type == TOKENTYPE.STAR:
-            self.__writeBinaryOp("MUL", leftType, leftType)
+            self.__writeBinaryOp("MUL", leftType, expectedRightType, leftType)
         elif tkn.type == TOKENTYPE.SLASH:
-            self.__writeBinaryOp("DIV", leftType, leftType)
+            self.__writeBinaryOp("DIV", leftType, expectedRightType, leftType)
         elif tkn.type == TOKENTYPE.MOD:
-            self.__writeBinaryOp("DIVk", leftType, leftType)
-            self.__writeBinaryOp("MUL", leftType, leftType)
-            self.__writeBinaryOp("SUB", leftType, leftType)
+            self.__writeBinaryOp("DIVk", leftType, expectedRightType, leftType)
+            self.__writeBinaryOp("MUL", leftType, expectedRightType, leftType)
+            self.__writeBinaryOp("SUB", leftType, expectedRightType, leftType)
+        elif tkn.type == TOKENTYPE.AMPER:
+            self.__writeBinaryOp("AND", leftType, expectedRightType, leftType)
+        elif tkn.type == TOKENTYPE.VBAR:
+            self.__writeBinaryOp("ORA", leftType, expectedRightType, leftType)
+        elif tkn.type == TOKENTYPE.CARET:
+            self.__writeBinaryOp("EOR", leftType, expectedRightType, leftType)
+        elif tkn.type == TOKENTYPE.LSH or tkn.type == TOKENTYPE.RSH:
+            self.__writeBinaryOp("SFT", leftType, expectedRightType, leftType)
         elif tkn.type == TOKENTYPE.EQUALEQUAL:
-            self.__writeBinaryOp("EQU", leftType, BoolDataType())
+            self.__writeBinaryOp("EQU", leftType, expectedRightType, BoolDataType())
             leftType = BoolDataType()
         elif tkn.type == TOKENTYPE.GRTR:
-            self.__writeBinaryOp("GTH", leftType, BoolDataType())
+            self.__writeBinaryOp("GTH", leftType, expectedRightType, BoolDataType())
             leftType = BoolDataType()
         elif tkn.type == TOKENTYPE.LESS:
-            self.__writeBinaryOp("LTH", leftType, BoolDataType())
+            self.__writeBinaryOp("LTH", leftType, expectedRightType, BoolDataType())
             leftType = BoolDataType()
         elif tkn.type == TOKENTYPE.GRTREQL:
             # >= is just *not* <. so check if it's less than, and NOT the result
-            self.__writeBinaryOp("LTH", leftType, BoolDataType())
+            self.__writeBinaryOp("LTH", leftType, expectedRightType, BoolDataType())
             self.__writeOut("#00 EQU\n")
             leftType = BoolDataType()
         elif tkn.type == TOKENTYPE.LESSEQL:
             # <= is just *not* >. so check if it's greater than, and NOT the result
-            self.__writeBinaryOp("GTH", leftType, BoolDataType())
+            self.__writeBinaryOp("GTH", leftType, expectedRightType, BoolDataType())
             self.__writeOut("#00 EQU\n")
             leftType = BoolDataType()
         else: # should never happen
@@ -727,7 +777,7 @@ class Parser:
             lastType = None
             offset = 0
 
-            if varInfo.indx == VARINFOINDXS.DEVICE.value or varInfo == VARINFOINDXS.SUBROUTINE.value:
+            if varInfo.indx == VARINFOINDXS.DEVICE.value or varInfo == VARINFOINDXS.SUBROUTINE.value or varInfo == VARINFOINDXS.VECTOR.value:
                 ltype = varInfo.var
             else:
                 ltype = varInfo.var.dtype
@@ -903,7 +953,7 @@ class Parser:
         return sub
 
     def __defSub(self, retType: DataType, ident: Token):
-        if not self.currentSub == -1:
+        if self.currentSub != -1 or self.currentVec != -1:
             self.__error("Cannot define a function here!")
 
         ident = ident.word
@@ -950,6 +1000,27 @@ class Parser:
 
         # reset our currentSub index :)
         self.currentSub = -1
+        
+    def __defVec(self):
+        if self.currentSub != -1 or self.currentVec != -1:
+            self.__error("Cannot define a vector here!")
+
+        self.__consume(TOKENTYPE.IDENT, "Expected identifier for vector declaration!")
+        ident = self.previous.word
+        vec = Vector("VEC_%s" % ident)
+
+        # define our vector in our vector functions list
+        self.vecs.append(Variable(ident, vec))
+        self.currentVec = len(self.vecs) - 1
+
+        # parse the vector scope
+        self.__newScope()
+        self.__consume(TOKENTYPE.LBRACE, "Expected '{' to start vector body!")
+        self.__parseScope(True)
+        self.__popScope()
+
+        # reset our currentSub index :)
+        self.currentVec = -1
     
     def __defArray(self, dType: DataType, ident: Token):
         # arrays in global scope will be put into our global table. this is part of the reason our
@@ -1139,15 +1210,19 @@ class Parser:
         self.devices.append(dev)
 
     def __returnState(self):
-        if self.currentSub == -1: # we're not currently parsing a function!
+        if self.currentSub == -1 and self.currentVec == -1: # we're not currently parsing a function!
             self.error("'return' not allowed in this context!")
 
-        retType: DataType = self.subs[self.currentSub].dtype.retType
+        
+        retType: DataType = None
+        if self.currentSub != -1: retType = self.subs[self.currentSub].dtype.retType
+        else: retType = self.vecs[self.currentVec].dtype.retType
 
         if self.__check(TOKENTYPE.SEMICOLON): # there's no expression
-            if retType.compare(VoidDataType): # make sure we can actually return nothing
+            if retType.compare(VoidDataType()): # make sure we can actually return nothing
                 self.__popRawScopes(len(self.scopeStack))
-                self.__writeOut("JMP2r\n")
+                if (self.currentSub != -1): self.__writeOut("JMP2r\n")
+                else: self.__writeOut("BRK\n")
                 return
             else:
                 self.__error("Expected expression of type '%s', got 'void'!" % retType.name)
@@ -1187,6 +1262,9 @@ class Parser:
             self.__returnState()
         elif self.__match(TOKENTYPE.DEVICE):
             self.__deviceState()
+        elif self.__match(TOKENTYPE.VECTOR):
+            self.__defVec()
+            return # we don't expect a ';'
         elif self.__match(TOKENTYPE.LBRACE):
             self.__newScope()
             self.__parseScope(True)
@@ -1238,6 +1316,12 @@ class Parser:
             self.out.write("@%s\n" % sub.dtype.subname)
             self.out.write(sub.dtype.instrs)
             self.out.write("JMP2r\n\n")
+
+        # TODO: write subroutines
+        for vec in self.vecs:
+            self.out.write("@%s\n" % vec.dtype.vecname)
+            self.out.write(vec.dtype.instrs)
+            self.out.write("BRK\n\n")
 
         # write memlib
         self.out.write(thinlib._MEMLIB)

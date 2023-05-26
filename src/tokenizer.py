@@ -18,6 +18,10 @@ class TOKENTYPE(Enum):
     SLASH = auto() # /
     MOD = auto()
     AMPER = auto() # &
+    VBAR = auto() # |
+    CARET = auto() # ^
+    LSH = auto() # <<
+    RSH = auto() # <<
     MINUSGRTR = auto() # ->
     DOT = auto() # .
     EQUAL = auto() # =
@@ -39,6 +43,7 @@ class TOKENTYPE(Enum):
     BOOL = auto() # bool
     VOID = auto() # void
     DEVICE = auto() # device
+    VECTOR = auto() # vector
     EOF = auto() # end of file
 
 class Token:
@@ -59,7 +64,8 @@ _ReservedWordTable = {
     "char"  : TOKENTYPE.CHAR,
     "bool"  : TOKENTYPE.BOOL,
     "void"  : TOKENTYPE.VOID,
-    "device": TOKENTYPE.DEVICE
+    "device": TOKENTYPE.DEVICE,
+    "vector": TOKENTYPE.VECTOR
 }
 
 def _isWhitespace(c):
@@ -208,10 +214,12 @@ class Lexer:
             '/' : (lambda : self.__makeToken(TOKENTYPE.SLASH)),
             '%' : (lambda : self.__makeToken(TOKENTYPE.MOD)),
             '&' : (lambda : self.__makeToken(TOKENTYPE.AMPER)),
+            '|' : (lambda : self.__makeToken(TOKENTYPE.VBAR)),
+            '^' : (lambda : self.__makeToken(TOKENTYPE.CARET)),
             '.' : (lambda : self.__makeToken(TOKENTYPE.DOT)),
             '=' : (lambda : self.__makeToken(TOKENTYPE.EQUALEQUAL) if self.__checkNext('=') else self.__makeToken(TOKENTYPE.EQUAL)),
-            '>' : (lambda : self.__makeToken(TOKENTYPE.GRTREQL) if self.__checkNext('=') else self.__makeToken(TOKENTYPE.GRTR)),
-            '<' : (lambda : self.__makeToken(TOKENTYPE.LESSEQL) if self.__checkNext('=') else self.__makeToken(TOKENTYPE.LESS)),
+            '>' : (lambda : self.__makeToken(TOKENTYPE.GRTREQL) if self.__checkNext('=') else (self.__makeToken(TOKENTYPE.RSH) if self.__checkNext('>') else self.__makeToken(TOKENTYPE.GRTR))),
+            '<' : (lambda : self.__makeToken(TOKENTYPE.LESSEQL) if self.__checkNext('=') else (self.__makeToken(TOKENTYPE.LSH) if self.__checkNext('<') else self.__makeToken(TOKENTYPE.LESS))),
             '\'': (lambda : self.__readCharacter()),
             '"' : (lambda : self.__readString()),
             '\0': (lambda : self.__makeToken(TOKENTYPE.EOF)),
