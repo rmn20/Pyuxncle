@@ -21,10 +21,10 @@ device Mouse[0x90] {
     int x;
     int y;
     char state;
-	char padd; // unused
-	int padd2; // unused
-	int scrollx;
-	int scrolly;
+    char padd; // unused
+    int padd2; // unused
+    int scrollx;
+    int scrolly;
 };
 
 System.r = 0x2ce9;
@@ -32,11 +32,11 @@ System.g = 0x01c0;
 System.b = 0x2ce5;
 
 vector event {
-	if(Mouse.state & 1) {
-		Screen.x = Mouse.x;
-		Screen.y = Mouse.y;
-		Screen.pixel = 0x41;
-	}
+    if(Mouse.state & 1) {
+        Screen.x = Mouse.x;
+        Screen.y = Mouse.y;
+        Screen.pixel = 0x41;
+    }
 }
 
 Mouse.vec = &event;
