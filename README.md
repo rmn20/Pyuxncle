@@ -1,6 +1,6 @@
 # Pyuxncle
 
-Pyuxncle is a single-pass compiler for a small subset of C (albeit without the std library). This compiler targets Uxntal, the assembly language of the Uxn virtual computer. The output Uxntal is not meant to be human readable, only to be directly passed to uxnasm.
+Pyuxncle is a single-pass compiler for a small C-like language. This compiler targets Uxntal, the assembly language of the Uxn virtual computer. The output Uxntal is not meant to be human readable, only to be directly passed to uxnasm.
 
 ## Usage
 
