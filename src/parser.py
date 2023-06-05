@@ -508,7 +508,7 @@ class Parser:
 
         num = self.__grabNumber(self.previous)
 
-        if num > 256:
+        if num >= 256:
             self.__writeIntLiteral(num)
             self.pushed += 2
             return IntDataType()
@@ -526,6 +526,7 @@ class Parser:
     # parses string literal
     def __stringlit(self, leftType: DataType, canAssign: bool, expectValue: bool, precLevel: PRECTYPE) -> DataType:
         strng = self.previous.word[1:-1] # removes ""
+        strng += '\0'
         data = ""
         dtype = DataArray(CharDataType(), len(strng))
         wasRaw = True
@@ -631,7 +632,6 @@ class Parser:
             
         if tkn.type == TOKENTYPE.RSH or tkn.type == TOKENTYPE.LSH:
             self.__writeOut("#0f AND\n")
-            self.__writeOut("")
             
         if tkn.type == TOKENTYPE.LSH:
             self.__writeOut("#40 SFT\n")
